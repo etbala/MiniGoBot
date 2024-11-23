@@ -1,128 +1,129 @@
 import numpy as np
-import math
 from scipy.special import softmax
 
-from src.main import GoGame
+class Node:
+    def __init__(self, state, parent=None):
+        """
+        Initialize a Node.
+        Args:
+            state (np.ndarray): Game state at this node.
+            parent (Node, optional): Parent node. Defaults to None.
+        """
+        self.state = state
+        self.parent = parent
+        self.child_nodes = {}
+        self.visits = 0
+        self.value_sum = 0
+        self.prior = None
 
-class MCTSNode:
-    """A single node in the MCTS search tree."""
-    def __init__(self, state, parent=None, prior=0.0):
-        self.state = state  # Current board state
-        self.parent = parent  # Parent node
-        self.children = {}  # Child nodes, indexed by action
-        self.visits = 0  # Visit count
-        self.value_sum = 0.0  # Sum of backpropagated values
-        self.prior = prior  # Prior probability from the policy network
-        self.terminal = self.check_terminal()  # Check if state is terminal
+    def is_terminal(self, game):
+        """Check if the game is over."""
+        return game.game_ended(self.state)
 
     def is_leaf(self):
-        """Check if the node is a leaf (no expanded children)."""
-        return len(self.children) == 0
+        """Check if the node is a leaf (no child nodes)."""
+        return len(self.child_nodes) == 0
 
-    def value(self):
-        """Calculate the mean value of this node."""
-        return self.value_sum / self.visits if self.visits > 0 else 0.0
-
-    def check_terminal(self):
-        """Check if the current state is terminal (game over)."""
-        return GoGame.game_ended(self.state)
-
-    def expand(self, action_priors):
+    def expand(self, go_env, policy):
         """
         Expand the node by adding child nodes.
-        :param action_priors: A list of (action, prior) pairs.
+        Args:
+            go_env: GymGo environment for generating child states.
+            policy (np.ndarray): Policy probabilities for child nodes.
         """
-        for action, prior in action_priors:
-            if action not in self.children:
-                next_state = GoGame.next_state(self.state, action, canonical=True)
-                self.children[action] = MCTSNode(state=next_state, parent=self, prior=prior)
+        valid_moves = go_env.valid_moves(self.state)
+        child_states = go_env.children(self.state)
 
-    def backprop(self, value):
+        # Iterate through valid moves and child_states simultaneously
+        child_state_index = 0
+        for move, valid in enumerate(valid_moves):
+            if valid:
+                # Assign the corresponding child state to the valid move
+                self.child_nodes[move] = Node(state=child_states[child_state_index], parent=self)
+                self.child_nodes[move].prior = policy[move]
+                child_state_index += 1
+
+    def backpropagate(self, value):
         """
-        Backpropagate the value through the tree.
-        :param value: Value to propagate.
+        Backpropagate value to parent nodes.
+        Args:
+            value (float): Value to propagate.
         """
         self.visits += 1
         self.value_sum += value
         if self.parent:
-            self.parent.backprop(-value)  # Alternate the perspective
+            self.parent.backpropagate(-value)  # Invert value for opponent
 
-
-class MCTS:
-    """Monte Carlo Tree Search with policy and value guidance."""
-    def __init__(self, actor_critic_model, c_puct=1.5, num_simulations=800):
-        self.actor_critic_model = actor_critic_model
-        self.c_puct = c_puct  # Exploration constant
-        self.num_simulations = num_simulations  # Number of simulations
-
-    def run(self, root_state):
+    def get_value(self, exploration_weight=1.5):
         """
-        Perform MCTS simulations starting from the root state.
-        :param root_state: Initial game state.
-        :return: Normalized visit count distribution over actions.
+        Compute the UCB1 value for selecting child nodes.
+        Args:
+            exploration_weight (float): Weight for exploration.
         """
-        root = MCTSNode(state=root_state)
+        if self.visits == 0:
+            return float('inf')  # Prioritize unexplored nodes
+        mean_value = self.value_sum / self.visits
+        exploration_term = exploration_weight * self.prior * np.sqrt(self.parent.visits) / (1 + self.visits)
+        return mean_value + exploration_term
 
-        # Initialize root with policy priors
-        policy, _ = self.actor_critic_model.pt_actor_critic(root.state[np.newaxis])
-        policy = policy.detach().numpy().flatten()
-        legal_moves = GoGame.valid_moves(root.state)
-        action_priors = [(action, policy[action]) for action in np.where(legal_moves)[0]]
-        root.expand(action_priors)
+def select(node):
+    """
+    Select the child node with the highest UCB value.
+    Args:
+        node (Node): Current node.
+    Returns:
+        Node: Selected child node.
+    """
+    return max(node.child_nodes.values(), key=lambda n: n.get_value())
 
-        # Perform simulations
-        for _ in range(self.num_simulations):
-            self.simulate(root)
+def expand_and_evaluate(node, actor_critic, game):
+    """
+    Expand the node and evaluate it using the Actor-Critic network.
+    Args:
+        node (Node): Node to expand.
+        actor_critic (callable): Neural network for policy and value estimation.
+        game: Game environment for generating child states.
+    """
+    state = node.state[np.newaxis]  # Add batch dimension
+    policy_logits, value = actor_critic(state)
+    policy = softmax(policy_logits.flatten())
+    node.expand(game, policy)
+    return value.item()
 
-        # Compute action probabilities based on visit counts
-        visit_counts = np.zeros(GoGame.action_size(root.state))
-        for action, child in root.children.items():
-            visit_counts[action] = child.visits
-        return visit_counts / visit_counts.sum()
+def mcts_step(root, actor_critic, game):
+    """
+    Perform a single MCTS step.
+    Args:
+        root (Node): Root node of the search.
+        actor_critic (callable): Neural network for policy and value estimation.
+        game: Game environment.
+    """
+    node = root
+    while not node.is_leaf() and not node.is_terminal(game):
+        node = select(node)
 
-    def simulate(self, node):
-        """
-        Perform a single MCTS simulation.
-        :param node: Node to start the simulation from.
-        """
-        path = []
+    if node.is_terminal(game):
+        value = game.winning(node.state)  # Terminal value
+        node.backpropagate(value)
+        return
 
-        # Selection and Expansion
-        while not node.is_leaf() and not node.terminal:
-            action, node = self.select(node)
-            path.append(node)
+    value = expand_and_evaluate(node, actor_critic, game)
+    node.backpropagate(value)
 
-        # Leaf Evaluation
-        if not node.terminal:
-            policy, value = self.actor_critic_model.pt_actor_critic(node.state[np.newaxis])
-            policy = policy.detach().numpy().flatten()
-            value = value.item()
+def mcts_search(game, actor_critic, num_simulations):
+    """
+    Perform MCTS on a given game state.
+    Args:
+        game: Game environment.
+        actor_critic (callable): Neural network for policy and value estimation.
+        num_simulations (int): Number of simulations to run.
+    Returns:
+        Node: Root node after search.
+    """
+    root_state = game.canonical_state()
+    root = Node(state=root_state)
 
-            legal_moves = GoGame.valid_moves(node.state)
-            action_priors = [(action, policy[action]) for action in np.where(legal_moves)[0]]
-            node.expand(action_priors)
-        else:
-            value = GoGame.winning(node.state)  # Use the outcome for terminal states
+    for _ in range(num_simulations):
+        mcts_step(root, actor_critic, game)
 
-        # Backpropagation
-        for node in reversed(path):
-            node.backprop(value)
-            value = -value  # Alternate perspective
-
-    def select(self, node):
-        """
-        Select a child node using the UCT formula.
-        :param node: Current node.
-        :return: Selected action and corresponding child node.
-        """
-        best_action, best_child = None, None
-        max_uct = -float('inf')
-
-        for action, child in node.children.items():
-            avg_q = child.value()
-            uct_score = avg_q + self.c_puct * child.prior * math.sqrt(node.visits) / (1 + child.visits)
-            if uct_score > max_uct:
-                best_action, best_child = action, child
-                max_uct = uct_score
-
-        return best_action, best_child
+    return root

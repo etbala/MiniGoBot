@@ -2,14 +2,9 @@ import numpy as np
 import torch
 from scipy.special import softmax
 
+# mcts.py
 class Node:
     def __init__(self, state, parent=None):
-        """
-        Initialize a Node.
-        Args:
-            state (np.ndarray): Game state at this node.
-            parent (Node, optional): Parent node. Defaults to None.
-        """
         self.state = state
         self.parent = parent
         self.child_nodes = {}
@@ -17,9 +12,10 @@ class Node:
         self.value_sum = 0
         self.prior = None
 
-    def is_terminal(self, game):
-        """Check if the game is over."""
-        return game.game_ended()
+    def is_terminal(self, go_env):
+        """Check if the node is terminal based on the state."""
+        GoGame = go_env.gogame
+        return GoGame.game_ended(self.state)
 
     def is_leaf(self):
         """Check if the node is a leaf (no child nodes)."""
@@ -32,40 +28,41 @@ class Node:
             go_env: GymGo environment for generating child states.
             policy (np.ndarray): Policy probabilities for child nodes.
         """
-        valid_moves = go_env.valid_moves(self.state)
-        child_states = go_env.children(self.state)
+        GoGame = go_env.gogame
+        valid_moves = GoGame.valid_moves(self.state)
+        child_states = GoGame.children(self.state, canonical=True, padded=False)
 
-        # Iterate through valid moves and child_states simultaneously
-        child_state_index = 0
         for move, valid in enumerate(valid_moves):
             if valid:
-                # Assign the corresponding child state to the valid move
-                self.child_nodes[move] = Node(state=child_states[child_state_index], parent=self)
+                if move < len(child_states):  # Regular board move
+                    child_state = child_states[move]
+                else:  # "Pass" action
+                    GoVars = go_env.govars
+                    child_state[GoVars.TURN_CHNL] = 1 - child_state[GoVars.TURN_CHNL]  # Switch turn
+                
+                self.child_nodes[move] = Node(state=child_state, parent=self)
                 self.child_nodes[move].prior = policy[move]
-                child_state_index += 1
 
     def backpropagate(self, value):
-        """
-        Backpropagate value to parent nodes.
-        Args:
-            value (float): Value to propagate.
-        """
         self.visits += 1
         self.value_sum += value
         if self.parent:
-            self.parent.backpropagate(-value)  # Invert value for opponent
+            self.parent.backpropagate(-value)
 
     def get_value(self, exploration_weight=1.5):
-        """
-        Compute the UCB1 value for selecting child nodes.
-        Args:
-            exploration_weight (float): Weight for exploration.
-        """
         if self.visits == 0:
-            return float('inf')  # Prioritize unexplored nodes
+            return float('inf')
         mean_value = self.value_sum / self.visits
         exploration_term = exploration_weight * self.prior * np.sqrt(self.parent.visits) / (1 + self.visits)
         return mean_value + exploration_term
+
+    def get_visit_counts(self):
+        total_actions = self.state.shape[-1] ** 2 + 1  # Including pass
+        visit_counts = np.zeros(total_actions)
+        for move, child in self.child_nodes.items():
+            visit_counts[move] = child.visits
+        return visit_counts
+
 
 def select(node):
     """
@@ -77,7 +74,7 @@ def select(node):
     """
     return max(node.child_nodes.values(), key=lambda n: n.get_value())
 
-def expand_and_evaluate(node, actor_critic, game):
+def expand_and_evaluate(node, actor_critic, go_env):
     """
     Expand the node and evaluate it using the Actor-Critic network.
     Args:
@@ -85,14 +82,15 @@ def expand_and_evaluate(node, actor_critic, game):
         actor_critic (callable): Neural network for policy and value estimation.
         game: Game environment for generating child states.
     """
-    state = node.state[np.newaxis]  # Add batch dimension
-    state = torch.tensor(state, dtype=torch.float32)  # Convert to PyTorch tensor
+    state = node.state[np.newaxis]
+    device = next(actor_critic.parameters()).device
+    state = torch.tensor(state, dtype=torch.float32).to(device)
     policy_logits, value = actor_critic(state)
-    policy = softmax(policy_logits.flatten())
-    node.expand(game, policy)
+    policy = torch.softmax(policy_logits, dim=1).squeeze(0).cpu().detach().numpy()
+    node.expand(go_env, policy)
     return value.item()
 
-def mcts_step(root, actor_critic, game):
+def mcts_step(root, actor_critic, go_env):
     """
     Perform a single MCTS step.
     Args:
@@ -101,18 +99,19 @@ def mcts_step(root, actor_critic, game):
         game: Game environment.
     """
     node = root
-    while not node.is_leaf() and not node.is_terminal(game):
+    while not node.is_leaf() and not node.is_terminal(go_env):
         node = select(node)
 
-    if node.is_terminal(game):
-        value = game.winning(node.state)  # Terminal value
+    if node.is_terminal(go_env):
+        GoGame = go_env.gogame
+        value = GoGame.winning(node.state)
         node.backpropagate(value)
         return
 
-    value = expand_and_evaluate(node, actor_critic, game)
+    value = expand_and_evaluate(node, actor_critic, go_env)
     node.backpropagate(value)
 
-def mcts_search(game, actor_critic, num_simulations):
+def mcts_search(go_env, actor_critic, num_simulations):
     """
     Perform MCTS on a given game state.
     Args:
@@ -122,10 +121,10 @@ def mcts_search(game, actor_critic, num_simulations):
     Returns:
         Node: Root node after search.
     """
-    root_state = game.canonical_state()
-    root = Node(state=root_state)
+    state = go_env.canonical_state()
+    root = Node(state=state)
 
     for _ in range(num_simulations):
-        mcts_step(root, actor_critic, game)
+        mcts_step(root, actor_critic, go_env)
 
     return root

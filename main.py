@@ -19,6 +19,10 @@ def main():
     CHECKPOINT_DIR = "checkpoints"
     OUTPUT_PLOTS_DIR = "plots"
 
+    # Determine the device (CPU or CUDA)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
     # Ensure directories exist
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     os.makedirs(OUTPUT_PLOTS_DIR, exist_ok=True)
@@ -27,7 +31,10 @@ def main():
     import gym
     env = gym.make("gym_go:go-v0", size=BOARD_SIZE)
 
-    model = ActorCriticNet(BOARD_SIZE)
+    GoGame = gym.make('gym_go:go-v0', size=0).gogame
+
+    # **Move the model to the device**
+    model = ActorCriticNet(BOARD_SIZE).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     evaluator = EloEvaluator()
@@ -50,9 +57,9 @@ def main():
         training_data = [event for traj in replay for event in traj.get_events()]
 
         # Prepare training data
-        states = torch.tensor([event[0] for event in training_data], dtype=torch.float32)
-        policies = torch.tensor([event[6] for event in training_data], dtype=torch.float32)
-        values = torch.tensor([event[5] for event in training_data], dtype=torch.float32)
+        states = torch.tensor([event[0] for event in training_data], dtype=torch.float32).to(device)
+        policies = torch.tensor([event[6] for event in training_data], dtype=torch.float32).to(device)
+        values = torch.tensor([event[5] for event in training_data], dtype=torch.float32).to(device)
 
         # Train the model
         print("Training the model...")
@@ -62,6 +69,11 @@ def main():
         for epoch_idx in range(EPOCHS):
             total_loss = 0
             for batch_states, batch_policies, batch_values in tqdm(dataloader, desc=f"Epoch {epoch_idx + 1}/{EPOCHS}"):
+                # **Move batch data to device**
+                batch_states = batch_states.to(device)
+                batch_policies = batch_policies.to(device)
+                batch_values = batch_values.to(device)
+
                 optimizer.zero_grad()
                 loss, _, _ = model.compute_loss(batch_states, None, batch_values, batch_policies)
                 loss.backward()
@@ -80,9 +92,9 @@ def main():
         # Evaluate against the previous checkpoint
         if epoch > 1:
             prev_checkpoint_name = f"model_epoch_{epoch - 1}.pth"
-            prev_model = ActorCriticNet(BOARD_SIZE)
+            prev_model = ActorCriticNet(BOARD_SIZE).to(device)
             prev_checkpoint_path = os.path.join(CHECKPOINT_DIR, prev_checkpoint_name)
-            prev_model.load_state_dict(torch.load(prev_checkpoint_path))
+            prev_model.load_state_dict(torch.load(prev_checkpoint_path, map_location=device))
 
             prev_policy = ActorCriticPolicy(prev_model, MCTS_SIMULATIONS, TEMPERATURE)
             win_rate, _, _, _ = play_games(env, black_policy, prev_policy, EPISODES)

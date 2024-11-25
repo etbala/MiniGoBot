@@ -1,7 +1,7 @@
 import unittest
 import torch
 from torch.optim import Adam
-from src.agents.actor_critic import ActorCriticNet
+from go_bot.actor_critic import ActorCriticNet
 
 
 class TestActorCriticNet(unittest.TestCase):

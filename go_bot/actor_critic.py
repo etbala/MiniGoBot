@@ -95,19 +95,20 @@ class ActorCriticPolicy:
             debug (bool): Whether to return debug information.
         """
         if self.mcts_simulations > 0:
-            # MCTS-guided policy
             root_node = mcts_search(go_env, self.model, num_simulations=self.mcts_simulations)
-            visit_counts = root_node.get_visit_counts()
-            policy = visit_counts ** (1 / self.temperature)
+            total_visits = sum(child.visits for child in root_node.child_nodes.values())
+            policy = np.zeros(go_env.action_space.n)
+            for move, child in root_node.child_nodes.items():
+                policy[move] = child.visits / total_visits if total_visits > 0 else 0
+            policy = policy ** (1 / self.temperature)
             policy /= policy.sum()
-
         else:
-            # Direct policy from the actor network
             state = go_env.canonical_state()
-            policy_logits, _ = self.model(torch.tensor(state[np.newaxis], dtype=torch.float32))
-            policy = torch.softmax(policy_logits.squeeze(), dim=0).detach().numpy()
+            device = next(self.model.parameters()).device
+            state_tensor = torch.tensor(state[np.newaxis], dtype=torch.float32).to(device)
+            policy_logits, _ = self.model(state_tensor)
+            policy = torch.softmax(policy_logits.squeeze(), dim=0).detach().cpu().numpy()
 
         if debug:
             return policy, root_node if self.mcts_simulations > 0 else None
         return policy
-

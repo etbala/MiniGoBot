@@ -1,8 +1,9 @@
 import unittest
 import numpy as np
+import torch
 from unittest.mock import MagicMock
 
-from src.agents.mcts import Node, expand_and_evaluate, mcts_step, mcts_search
+from go_bot.mcts import Node, expand_and_evaluate, mcts_step, mcts_search
 
 
 class TestMCTS(unittest.TestCase):
@@ -24,9 +25,13 @@ class TestMCTS(unittest.TestCase):
         # Mock Actor-Critic network
         self.mock_actor_critic = MagicMock()
         self.mock_actor_critic.return_value = (
-            np.array([[0.2, 0.5, 0.1, 0.2, 0.0]]),  # Policy logits
-            np.array([[0.3]])  # Value
+            torch.tensor([[0.2, 0.5, 0.1, 0.2, 0.0]]),  # Policy logits as tensor
+            torch.tensor([[0.3]])  # Value as tensor
         )
+
+        # Mock the parameters method to return a new iterator each time
+        param = torch.nn.Parameter(torch.empty(0))
+        self.mock_actor_critic.parameters.side_effect = lambda: iter([param])
 
     def test_node_initialization(self):
         """
@@ -73,7 +78,7 @@ class TestMCTS(unittest.TestCase):
         value = expand_and_evaluate(node, self.mock_actor_critic, self.mock_env)
 
         # Verify that the value is returned correctly
-        self.assertEqual(value, 0.3)
+        self.assertAlmostEqual(value, 0.3)
 
         # Verify that expand was called with the correct arguments
         self.assertEqual(len(node.child_nodes), 3)

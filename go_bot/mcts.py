@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from scipy.special import softmax
 
 class Node:
@@ -18,7 +19,7 @@ class Node:
 
     def is_terminal(self, game):
         """Check if the game is over."""
-        return game.game_ended(self.state)
+        return game.game_ended()
 
     def is_leaf(self):
         """Check if the node is a leaf (no child nodes)."""
@@ -85,6 +86,7 @@ def expand_and_evaluate(node, actor_critic, game):
         game: Game environment for generating child states.
     """
     state = node.state[np.newaxis]  # Add batch dimension
+    state = torch.tensor(state, dtype=torch.float32)  # Convert to PyTorch tensor
     policy_logits, value = actor_critic(state)
     policy = softmax(policy_logits.flatten())
     node.expand(game, policy)

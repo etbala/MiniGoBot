@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
+from go_bot.mcts import mcts_search
 
 class ActorCriticNet(nn.Module):
     def __init__(self, board_size):
@@ -96,7 +96,6 @@ class ActorCriticPolicy:
         """
         if self.mcts_simulations > 0:
             # MCTS-guided policy
-            from src.agents.mcts import mcts_search
             root_node = mcts_search(go_env, self.model, num_simulations=self.mcts_simulations)
             visit_counts = root_node.get_visit_counts()
             policy = visit_counts ** (1 / self.temperature)

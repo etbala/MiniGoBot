@@ -42,7 +42,7 @@ class ActorCriticNet(nn.Module):
         value = self.critic_head(shared)
         return policy_logits, value
 
-    def compute_loss(self, states, actions, rewards, policy_targets):
+    def compute_loss(self, states, actions, rewards, policy_targets, valid_moves):
         """
         Compute combined loss for actor-critic training.
         Args:
@@ -51,24 +51,46 @@ class ActorCriticNet(nn.Module):
             rewards (torch.Tensor): Rewards (game outcomes).
             policy_targets (torch.Tensor): Target policy probabilities from MCTS.
         """
+        device = next(self.parameters()).device
+        states = states.to(device)
+        rewards = rewards.to(device)
+        policy_targets = policy_targets.to(device)
+        valid_moves = valid_moves.to(device)
+
         policy_logits, values = self.forward(states)
 
-        # Policy loss (cross-entropy between predicted and target policies)
-        policy_loss = -torch.sum(policy_targets * torch.log_softmax(policy_logits, dim=1), dim=1).mean()
+        # Debugging print statements
+        print(f"policy_logits shape: {policy_logits.shape}")  # Should be [batch_size, action_size]
+        print(f"valid_moves shape: {valid_moves.shape}")      # Should be [batch_size, action_size]
 
-        # Value loss (MSE between predicted and target rewards)
+        # Mask invalid moves in logits
+        large_negative = -1e8
+        policy_logits = policy_logits * valid_moves + (1 - valid_moves) * large_negative
+
+
+        # Adjust policy targets
+        policy_targets = policy_targets * valid_moves
+        policy_targets /= policy_targets.sum(dim=1, keepdim=True) + 1e-8
+
+        # Compute log probabilities
+        log_probs = torch.log_softmax(policy_logits, dim=1)
+
+        # Policy loss (cross-entropy)
+        policy_loss = -torch.sum(policy_targets * log_probs, dim=1).mean()
+
+        # Value loss (MSE)
         value_loss = nn.functional.mse_loss(values.squeeze(-1), rewards)
 
         # Combined loss
         loss = policy_loss + value_loss
         return loss, policy_loss.item(), value_loss.item()
 
-    def train_step(self, optimizer, states, actions, rewards, policy_targets):
+    def train_step(self, optimizer, states, actions, rewards, policy_targets, valid_moves):
         """
         Perform a single training step.
         """
         optimizer.zero_grad()
-        loss, policy_loss, value_loss = self.compute_loss(states, actions, rewards, policy_targets)
+        loss, policy_loss, value_loss = self.compute_loss(states, actions, rewards, policy_targets, valid_moves)
         loss.backward()
         optimizer.step()
         return loss.item(), policy_loss, value_loss
@@ -107,7 +129,18 @@ class ActorCriticPolicy:
             device = next(self.model.parameters()).device
             state_tensor = torch.tensor(state[np.newaxis], dtype=torch.float32).to(device)
             policy_logits, _ = self.model(state_tensor)
-            policy = torch.softmax(policy_logits.squeeze(), dim=0).detach().cpu().numpy()
+            policy_logits = policy_logits.squeeze(0)
+
+            # Get valid moves
+            valid_moves = go_env.valid_moves()
+            valid_moves = torch.tensor(valid_moves, dtype=torch.bool).to(device)
+
+            # Mask invalid moves
+            large_negative = -1e8
+            policy_logits[~valid_moves] = large_negative
+
+            # Apply softmax
+            policy = torch.softmax(policy_logits, dim=0).detach().cpu().numpy()
 
         if debug:
             return policy, root_node if self.mcts_simulations > 0 else None

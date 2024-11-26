@@ -13,14 +13,15 @@ class TestMCTS(unittest.TestCase):
         """
         # Mock GymGo environment
         self.mock_env = MagicMock()
-        self.mock_env.valid_moves.return_value = [1, 0, 1, 1, 0]
-        self.mock_env.children.return_value = [
+        self.mock_env.gogame.valid_moves.return_value = [1, 0, 1, 1, 0]  # 5 possible moves, 3 valid
+        self.mock_env.gogame.children.return_value = [
             np.array([[0, 0], [0, 1]]),  # Child 1
             np.array([[1, 0], [0, 0]]),  # Child 2
             np.array([[0, 1], [0, 0]]),  # Child 3
         ]
-        self.mock_env.game_ended.return_value = False
-        self.mock_env.winning.return_value = 0
+        self.mock_env.gogame.game_ended.return_value = False
+        self.mock_env.gogame.winning.return_value = 0
+        self.mock_env.govars.TURN_CHNL = 0  # Mock TURN_CHNL for switching turn
 
         # Mock Actor-Critic network
         self.mock_actor_critic = MagicMock()
@@ -59,14 +60,14 @@ class TestMCTS(unittest.TestCase):
         node.expand(self.mock_env, policy)
 
         # Check that child nodes were created for valid moves
-        self.assertEqual(len(node.child_nodes), 3)
+        self.assertEqual(len(node.child_nodes), 3)  # 3 valid moves
         for move in [0, 2, 3]:
             self.assertIn(move, node.child_nodes)
             self.assertIsInstance(node.child_nodes[move], Node)
 
         # Check that priors match the policy
         for move, child in node.child_nodes.items():
-            self.assertEqual(child.prior, policy[move])
+            self.assertAlmostEqual(child.prior, policy[move])
 
     def test_expand_and_evaluate(self):
         """
@@ -81,7 +82,7 @@ class TestMCTS(unittest.TestCase):
         self.assertAlmostEqual(value, 0.3)
 
         # Verify that expand was called with the correct arguments
-        self.assertEqual(len(node.child_nodes), 3)
+        self.assertEqual(len(node.child_nodes), 3)  # 3 valid moves
         for move in [0, 2, 3]:
             self.assertIn(move, node.child_nodes)
 

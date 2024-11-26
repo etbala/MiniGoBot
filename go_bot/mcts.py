@@ -2,7 +2,6 @@ import numpy as np
 import torch
 from scipy.special import softmax
 
-# mcts.py
 class Node:
     def __init__(self, state, parent=None):
         self.state = state
@@ -29,19 +28,17 @@ class Node:
             policy (np.ndarray): Policy probabilities for child nodes.
         """
         GoGame = go_env.gogame
-        valid_moves = GoGame.valid_moves(self.state)
-        child_states = GoGame.children(self.state, canonical=True, padded=False)
+        GoVars = go_env.govars
 
-        for move, valid in enumerate(valid_moves):
-            if valid:
-                if move < len(child_states):  # Regular board move
-                    child_state = child_states[move]
-                else:  # "Pass" action
-                    GoVars = go_env.govars
-                    child_state[GoVars.TURN_CHNL] = 1 - child_state[GoVars.TURN_CHNL]  # Switch turn
-                
-                self.child_nodes[move] = Node(state=child_state, parent=self)
-                self.child_nodes[move].prior = policy[move]
+        valid_moves = GoGame.valid_moves(self.state)
+        child_states = GoGame.children(self.state, canonical=True, padded=True)
+
+        valid_move_indices = np.flatnonzero(valid_moves)
+
+        for move in valid_move_indices:
+            child_state = child_states[move]
+            self.child_nodes[move] = Node(state=child_state, parent=self)
+            self.child_nodes[move].prior = policy[move]
 
     def backpropagate(self, value):
         self.visits += 1
@@ -86,7 +83,15 @@ def expand_and_evaluate(node, actor_critic, go_env):
     device = next(actor_critic.parameters()).device
     state = torch.tensor(state, dtype=torch.float32).to(device)
     policy_logits, value = actor_critic(state)
-    policy = torch.softmax(policy_logits, dim=1).squeeze(0).cpu().detach().numpy()
+    policy_logits = policy_logits.squeeze(0).cpu().detach().numpy()
+
+    # Get valid moves
+    GoGame = go_env.gogame
+    valid_moves = GoGame.valid_moves(node.state)
+    policy_logits[valid_moves == 0] = -np.inf  # Mask invalid moves
+
+    # Apply softmax
+    policy = softmax(policy_logits)
     node.expand(go_env, policy)
     return value.item()
 
@@ -104,7 +109,12 @@ def mcts_step(root, actor_critic, go_env):
 
     if node.is_terminal(go_env):
         GoGame = go_env.gogame
+        GoVars = go_env.govars
+        current_player = GoGame.turn(node.state)
         value = GoGame.winning(node.state)
+        # Adjust value to current player's perspective
+        if current_player == GoVars.WHITE:
+            value = -value
         node.backpropagate(value)
         return
 

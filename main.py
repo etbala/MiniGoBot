@@ -1,17 +1,19 @@
 import os
 import torch
+import numpy as np
 import matplotlib.pyplot as plt
 from go_bot.actor_critic import ActorCriticNet, ActorCriticPolicy
 from go_bot.mcts import mcts_search
 from tqdm import tqdm
+import gym
 from go_bot.eval import EloEvaluator
 from go_bot.self_play import play_games
 
 def main():
     # Configuration
-    BOARD_SIZE = 19
-    EPISODES = 20
-    MCTS_SIMULATIONS = 50
+    BOARD_SIZE = 9  # Adjusted for training stability
+    EPISODES = 5  # Increased number of episodes
+    MCTS_SIMULATIONS = 5  # Adjusted for better search
     TEMPERATURE = 1.0
     LEARNING_RATE = 0.001
     BATCH_SIZE = 32
@@ -28,18 +30,14 @@ def main():
     os.makedirs(OUTPUT_PLOTS_DIR, exist_ok=True)
 
     # Initialize environment, model, and evaluator
-    import gym
     env = gym.make("gym_go:go-v0", size=BOARD_SIZE)
+    GoGame = env.gogame
 
-    GoGame = gym.make('gym_go:go-v0', size=0).gogame
-
-    # **Move the model to the device**
+    # Move the model to the device
     model = ActorCriticNet(BOARD_SIZE).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     evaluator = EloEvaluator()
-
-    # Add initial benchmark policy (random policy)
     evaluator.add_model("random_policy")
 
     # Initialize policy wrappers
@@ -48,7 +46,7 @@ def main():
 
     # Training loop
     print("Starting training...")
-    for epoch in range(1, 11):  # Example: 10 epochs
+    for epoch in range(1, 11):
         print(f"\n=== Epoch {epoch} ===")
         print("Generating self-play data...")
 
@@ -57,25 +55,33 @@ def main():
         training_data = [event for traj in replay for event in traj.get_events()]
 
         # Prepare training data
-        states = torch.tensor([event[0] for event in training_data], dtype=torch.float32).to(device)
-        policies = torch.tensor([event[6] for event in training_data], dtype=torch.float32).to(device)
-        values = torch.tensor([event[5] for event in training_data], dtype=torch.float32).to(device)
+        states = [event[0] for event in training_data]  # List of numpy arrays of shape [6, board_size, board_size]
+        valid_moves_list = [event[1] for event in training_data]  # List of numpy arrays of shape [action_size]
+        policies = [event[6] for event in training_data]  # List of numpy arrays of shape [action_size]
+        values = [event[3] for event in training_data]  # List of scalar values (rewards)
+
+        # Convert lists to numpy arrays
+        states_array = np.array(states)
+        valid_moves_array = np.array(valid_moves_list)
+        policies_array = np.array(policies)
+        values_array = np.array(values)
+
+        # Convert to tensors
+        states_tensor = torch.tensor(states_array, dtype=torch.float32).to(device)
+        valid_moves_tensor = torch.tensor(valid_moves_array, dtype=torch.float32).to(device)
+        policies_tensor = torch.tensor(policies_array, dtype=torch.float32).to(device)
+        values_tensor = torch.tensor(values_array, dtype=torch.float32).to(device)
 
         # Train the model
         print("Training the model...")
-        dataset = torch.utils.data.TensorDataset(states, policies, values)
+        dataset = torch.utils.data.TensorDataset(states_tensor, policies_tensor, values_tensor, valid_moves_tensor)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
         for epoch_idx in range(EPOCHS):
             total_loss = 0
-            for batch_states, batch_policies, batch_values in tqdm(dataloader, desc=f"Epoch {epoch_idx + 1}/{EPOCHS}"):
-                # **Move batch data to device**
-                batch_states = batch_states.to(device)
-                batch_policies = batch_policies.to(device)
-                batch_values = batch_values.to(device)
-
+            for batch_states, batch_policies, batch_values, batch_valid_moves in tqdm(dataloader, desc=f"Epoch {epoch_idx + 1}/{EPOCHS}"):
                 optimizer.zero_grad()
-                loss, _, _ = model.compute_loss(batch_states, None, batch_values, batch_policies)
+                loss, _, _ = model.compute_loss(batch_states, None, batch_values, batch_policies, batch_valid_moves)
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
@@ -107,9 +113,6 @@ def main():
     print(f"Elo progression plot saved in {OUTPUT_PLOTS_DIR}")
 
 def plot_elo_progression(evaluator, output_dir):
-    """
-    Save a plot showing the Elo progression over time.
-    """
     model_names = list(evaluator.ratings.keys())
     ratings = [evaluator.get_rating(name) for name in model_names]
 

@@ -10,11 +10,6 @@ from go_bot import data, utils
 from go_bot import baselines
 from go_bot import actor_critic
 
-import logging
-
-# Suppress gym logs
-logging.getLogger('gym').setLevel(logging.ERROR)
-
 def model_eval(comm, args, curr_pi, checkpoint_pi, winrates):
     go_env = gym.make('gym_go:go-v0', size=args.size, reward_method=args.reward)
     # See how this new model compares
@@ -108,7 +103,7 @@ if __name__ == '__main__':
     curr_model = actor_critic.ActorCriticNet(args.size)
     curr_pi = actor_critic.ActorCriticPolicy('Current', curr_model, args)
     checkpoint_model = actor_critic.ActorCriticNet(args.size)
-    checkpoint_pi = actor_critic.ActorCriticPolicy('Checkpoint', curr_model, args)
+    checkpoint_pi = actor_critic.ActorCriticPolicy('Checkpoint', checkpoint_model, args)
 
     utils.mpi_log_debug(comm, f'Model has {utils.count_parameters(curr_model):,} trainable parameters')
 

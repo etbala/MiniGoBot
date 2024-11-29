@@ -1,132 +1,121 @@
+import collections
 import os
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-from go_bot.actor_critic import ActorCriticNet, ActorCriticPolicy
-from go_bot.mcts import mcts_search
-from tqdm import tqdm
+from datetime import datetime
+
 import gym
-from go_bot.eval import EloEvaluator
-from go_bot.self_play import play_games
+import torch
+from mpi4py import MPI
 
-def main():
-    # Configuration
-    BOARD_SIZE = 9  # Adjusted for training stability
-    EPISODES = 5  # Increased number of episodes
-    MCTS_SIMULATIONS = 5  # Adjusted for better search
-    TEMPERATURE = 1.0
-    LEARNING_RATE = 0.001
-    BATCH_SIZE = 32
-    EPOCHS = 5
-    CHECKPOINT_DIR = "checkpoints"
-    OUTPUT_PLOTS_DIR = "plots"
+from go_bot import data, utils
+from go_bot import baselines
+from go_bot import actor_critic
 
-    # Determine the device (CPU or CUDA)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+import logging
 
-    # Ensure directories exist
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_PLOTS_DIR, exist_ok=True)
+# Suppress gym logs
+logging.getLogger('gym').setLevel(logging.ERROR)
 
-    # Initialize environment, model, and evaluator
-    env = gym.make("gym_go:go-v0", size=BOARD_SIZE)
-    GoGame = env.gogame
+def model_eval(comm, args, curr_pi, checkpoint_pi, winrates):
+    go_env = gym.make('gym_go:go-v0', size=args.size, reward_method=args.reward)
+    # See how this new model compares
+    for opponent in [checkpoint_pi, baselines.RAND_PI]:
+        # Play some games
+        utils.mpi_log_debug(comm, f'Pitting {curr_pi} V {opponent}')
+        wr, _, _ = utils.mpi_play(comm, go_env, curr_pi, opponent, args.evaluations)
+        winrates[opponent] = wr
 
-    # Move the model to the device
-    model = ActorCriticNet(BOARD_SIZE).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    evaluator = EloEvaluator()
-    evaluator.add_model("random_policy")
+def train_step(comm, args, curr_pi, optim, checkpoint_pi):
+    # Environment
+    go_env = gym.make('gym_go:go-v0', size=args.size, reward_method=args.reward)
+    curr_model = curr_pi.pt_model
 
-    # Initialize policy wrappers
-    black_policy = ActorCriticPolicy(model, MCTS_SIMULATIONS, TEMPERATURE)
-    white_policy = ActorCriticPolicy(model, MCTS_SIMULATIONS, TEMPERATURE)
+    # Play episodes
+    utils.mpi_log_debug(comm, f'Self-Playing {checkpoint_pi} V {checkpoint_pi}...')
+    _, _, replays = utils.mpi_play(comm, go_env, checkpoint_pi, checkpoint_pi, args.episodes)
 
-    # Training loop
-    print("Starting training...")
-    for epoch in range(1, 11):
-        print(f"\n=== Epoch {epoch} ===")
-        print("Generating self-play data...")
+    # Write episodes
+    data.mpi_disk_append_replay(comm, args, replays)
+    utils.mpi_log_debug(comm, 'Added all replay data to disk')
 
-        # Self-play to generate training data
-        win_rate, _, replay, _ = play_games(env, black_policy, white_policy, EPISODES)
-        training_data = [event for traj in replay for event in traj.get_events()]
+    # Sample data as batches
+    traindata, replay_len = data.mpi_sample_eventdata(comm, args.replay_path, args.batches, args.batchsize)
 
-        # Prepare training data
-        states = [event[0] for event in training_data]  # List of numpy arrays of shape [6, board_size, board_size]
-        valid_moves_list = [event[1] for event in training_data]  # List of numpy arrays of shape [action_size]
-        policies = [event[6] for event in training_data]  # List of numpy arrays of shape [action_size]
-        values = [event[3] for event in training_data]  # List of scalar values (rewards)
+    # Optimize
+    utils.mpi_log_debug(comm, f'Optimizing in {len(traindata)} training steps...')
+    metrics = curr_model.optimize(comm, traindata, optim)
 
-        # Convert lists to numpy arrays
-        states_array = np.array(states)
-        valid_moves_array = np.array(valid_moves_list)
-        policies_array = np.array(policies)
-        values_array = np.array(values)
+    # Sync model
+    utils.mpi_log_debug(comm, f'Optimized | {str(metrics)}')
 
-        # Convert to tensors
-        states_tensor = torch.tensor(states_array, dtype=torch.float32).to(device)
-        valid_moves_tensor = torch.tensor(valid_moves_array, dtype=torch.float32).to(device)
-        policies_tensor = torch.tensor(policies_array, dtype=torch.float32).to(device)
-        values_tensor = torch.tensor(values_array, dtype=torch.float32).to(device)
+    return metrics, replay_len
 
-        # Train the model
-        print("Training the model...")
-        dataset = torch.utils.data.TensorDataset(states_tensor, policies_tensor, values_tensor, valid_moves_tensor)
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-        for epoch_idx in range(EPOCHS):
-            total_loss = 0
-            for batch_states, batch_policies, batch_values, batch_valid_moves in tqdm(dataloader, desc=f"Epoch {epoch_idx + 1}/{EPOCHS}"):
-                optimizer.zero_grad()
-                loss, _, _ = model.compute_loss(batch_states, None, batch_values, batch_policies, batch_valid_moves)
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
-            print(f"  Epoch {epoch_idx + 1}: Total Loss = {total_loss:.4f}")
+def train(comm, args, curr_pi, checkpoint_pi):
+    # Optimizer
+    curr_model = curr_pi.pt_model
+    optim = torch.optim.Adam(curr_model.parameters(), args.lr, weight_decay=1e-4)
 
-        # Save model checkpoint
-        checkpoint_name = f"model_epoch_{epoch}.pth"
-        checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
-        torch.save(model.state_dict(), checkpoint_path)
-        print(f"Model checkpoint saved: {checkpoint_path}")
+    # Start Timer
+    starttime = datetime.now()
 
-        evaluator.add_model(checkpoint_name)
+    # Header output
+    utils.mpi_log_info(comm, utils.get_iter_header())
 
-        # Evaluate against the previous checkpoint
-        if epoch > 1:
-            prev_checkpoint_name = f"model_epoch_{epoch - 1}.pth"
-            prev_model = ActorCriticNet(BOARD_SIZE).to(device)
-            prev_checkpoint_path = os.path.join(CHECKPOINT_DIR, prev_checkpoint_name)
-            prev_model.load_state_dict(torch.load(prev_checkpoint_path, map_location=device))
+    winrates = collections.defaultdict(float)
+    for iteration in range(args.iterations):
+        # Train Step
+        metrics, replay_len = train_step(comm, args, curr_pi, optim, checkpoint_pi)
 
-            prev_policy = ActorCriticPolicy(prev_model, MCTS_SIMULATIONS, TEMPERATURE)
-            win_rate, _, _, _ = play_games(env, black_policy, prev_policy, EPISODES)
+        # Model Evaluation
+        if (iteration + 1) % args.eval_interval == 0:
+            model_eval(comm, args, curr_pi, checkpoint_pi, winrates)
 
-            evaluator.update_ratings(checkpoint_name, prev_checkpoint_name, win_rate)
-            print(f"Win rate against {prev_checkpoint_name}: {win_rate:.2f}")
+        # Sync policies
+        utils.mpi_sync_checkpoint(comm, args, new_pi=curr_pi, old_pi=checkpoint_pi)
 
-    # Save Elo progression plot
-    plot_elo_progression(evaluator, OUTPUT_PLOTS_DIR)
-    print(f"Elo progression plot saved in {OUTPUT_PLOTS_DIR}")
+        # Print iteration summary
+        iter_info = utils.get_iter_entry(starttime, iteration, replay_len, metrics, winrates, checkpoint_pi)
 
-def plot_elo_progression(evaluator, output_dir):
-    model_names = list(evaluator.ratings.keys())
-    ratings = [evaluator.get_rating(name) for name in model_names]
+        utils.mpi_log_info(comm, iter_info)
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(model_names, ratings, marker="o", label="Elo Rating")
-    plt.xlabel("Model Checkpoint")
-    plt.ylabel("Elo Rating")
-    plt.title("Elo Rating Progression")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
 
-    plot_path = os.path.join(output_dir, "elo_progression.png")
-    plt.savefig(plot_path)
-    print(f"Elo progression plot saved at: {plot_path}")
+if __name__ == '__main__':
+    # Parallel Setup
+    comm = MPI.COMM_WORLD
+    world_size = comm.Get_size()
 
-if __name__ == "__main__":
-    main()
+    # Arguments
+    args = utils.hyperparameters()
+
+    # Save directory
+    if not os.path.exists(args.checkdir):
+        if comm.Get_rank() == 0:
+            os.makedirs(args.checkdir, exist_ok=True)
+    comm.Barrier()
+
+    # Logging
+    utils.mpi_config_log(args, comm)
+    utils.mpi_log_debug(comm, f"{world_size} Workers, {args}")
+
+    # Set parameters and replay data on disk
+    utils.mpi_sync_data(comm, args)
+
+    # Model and Policies
+    # curr_pi, curr_model = baselines.create_policy(args, 'Current')
+    # checkpoint_pi, checkpoint_model = baselines.create_policy(args, 'Checkpoint')
+
+    curr_model = actor_critic.ActorCriticNet(args.size)
+    curr_pi = actor_critic.ActorCriticPolicy('Current', curr_model, args)
+    checkpoint_model = actor_critic.ActorCriticNet(args.size)
+    checkpoint_pi = actor_critic.ActorCriticPolicy('Checkpoint', curr_model, args)
+
+    utils.mpi_log_debug(comm, f'Model has {utils.count_parameters(curr_model):,} trainable parameters')
+
+    # Device
+    device = torch.device(args.device)
+    curr_model.to(device)
+    checkpoint_model.to(device)
+
+    # Train
+    train(comm, args, curr_pi, checkpoint_pi)

@@ -1,6 +1,8 @@
 # Output Dirs
 checkpoints/
 plots/
+replays/
+bin/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

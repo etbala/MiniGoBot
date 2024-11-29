@@ -1,140 +1,246 @@
+import gym
 import numpy as np
-import torch
-from scipy.special import softmax
+from scipy import special
+
+GoGame = gym.make('gym_go:go-v0', size=0).gogame
+
+def get_state_vals(val_func, nodes):
+    states = list(map(lambda node: node.state, nodes))
+    vals = val_func(np.array(states))
+    return vals
+
+
+def set_state_vals(val_func, nodes):
+    vals = get_state_vals(val_func, nodes)
+    for val, node in zip(vals, nodes):
+        node.set_value(val.item())
+
+    return vals
+
+def invert_vals(vals):
+    return -vals
 
 class Node:
     def __init__(self, state, parent=None):
-        self.state = state
-        self.parent = parent
-        self.child_nodes = {}
-        self.visits = 0
-        self.value_sum = 0
-        self.prior = None
+        '''
+        Args:
+            parent (?Node): parent Node
+            prior_value (?float): the state value of this node
+            state: state of the game as a numpy array
+        '''
 
-    def is_terminal(self, go_env):
-        """Check if the node is terminal based on the state."""
-        GoGame = go_env.gogame
+        # Go
+        self.state = state
+        self.child_states = None
+
+        # Links
+        self.parent = parent
+        self.child_nodes = np.empty(self.actionsize(), dtype=object)
+
+        # Level
+        if parent is None:
+            self.level = 0
+        else:
+            self.level = self.parent.level + 1
+
+        # Value
+        self.val = None
+        self.first_action = None
+
+        # MCT
+        self.visits = 0
+        self.prior_pi = None
+        self.post_vals = []
+
+    def destroy(self):
+        for child in self.child_nodes:
+            if child is not None:
+                child.destroy()
+        del self.state
+        del self.parent
+        del self.child_nodes
+
+
+    def terminal(self):
         return GoGame.game_ended(self.state)
 
-    def is_leaf(self):
-        """Check if the node is a leaf (no child nodes)."""
-        return len(self.child_nodes) == 0
+    def winning(self):
+        return GoGame.winning(self.state)
 
-    def expand(self, go_env, policy):
-        """
-        Expand the node by adding child nodes.
-        Args:
-            go_env: GymGo environment for generating child states.
-            policy (np.ndarray): Policy probabilities for child nodes.
-        """
-        GoGame = go_env.gogame
-        GoVars = go_env.govars
+    def isleaf(self):
+        # Not the same as whether the state is terminal or not
+        return (self.child_nodes == None).all()
 
-        valid_moves = GoGame.valid_moves(self.state)
+    def isroot(self):
+        return self.parent is None
+
+    def make_childnode(self, action, state):
+        child_node = Node(state, self)
+        self.child_nodes[action] = child_node
+        if child_node.level == 1:
+            child_node.first_action = action
+        else:
+            assert self.first_action is not None
+            child_node.first_action = self.first_action
+        return child_node
+
+    def make_children(self):
+        """
+        :return: Padded children numpy states
+        """
         child_states = GoGame.children(self.state, canonical=True, padded=True)
+        actions = np.argwhere(self.valid_moves()).flatten()
+        for action in actions:
+            self.make_childnode(action, child_states[action])
+        self.child_states = child_states
 
-        valid_move_indices = np.flatnonzero(valid_moves)
+        return child_states
 
-        for move in valid_move_indices:
-            child_state = child_states[move]
-            self.child_nodes[move] = Node(state=child_state, parent=self)
-            self.child_nodes[move].prior = policy[move]
+    def get_child_nodes(self):
+        real_nodes = list(filter(lambda node: node is not None, self.child_nodes))
+        return real_nodes
 
-    def backpropagate(self, value):
+    def actionsize(self):
+        return GoGame.action_size(self.state)
+
+    def valid_moves(self):
+        return GoGame.valid_moves(self.state)
+
+    def step(self, move):
+        child = self.child_nodes[move]
+        if child is not None:
+            return child
+        else:
+            next_state = GoGame.next_state(self.state, move, canonical=True)
+            child = self.make_childnode(move, next_state)
+            return child
+
+
+    def set_value(self, val):
+        self.val = val
+
+    def get_value(self):
+        return self.val
+
+    def inverted_children_values(self):
+        inverted_vals = []
+        for child in self.child_nodes:
+            if child is not None:
+                inverted_vals.append(invert_vals(child.val))
+            else:
+                inverted_vals.append(0)
+        return np.array(inverted_vals)
+
+
+    def backprop(self, val):
+        self.post_vals.append(val)
         self.visits += 1
-        self.value_sum += value
-        if self.parent:
-            self.parent.backpropagate(-value)
+        if self.parent is not None:
+            inverted_val = invert_vals(val)
+            self.parent.backprop(inverted_val)
 
-    def get_value(self, exploration_weight=1.5):
-        if self.visits == 0:
-            return float('inf')
-        mean_value = self.value_sum / self.visits
-        exploration_term = exploration_weight * self.prior * np.sqrt(self.parent.visits) / (1 + self.visits)
-        return mean_value + exploration_term
+    def set_prior_pi(self, prior_pi):
+        if prior_pi is not None:
+            self.prior_pi = prior_pi
+        else:
+            # Uses children state values to make prior pi
+            self.prior_pi = np.zeros(self.actionsize())
+            valid_moves = self.valid_moves()
+            where_valid = np.argwhere(valid_moves).flatten()
+            q_logits = self.inverted_children_values()
+            self.prior_pi[where_valid] = special.softmax(q_logits[where_valid])
+
+            assert not np.isnan(self.prior_pi).any()
 
     def get_visit_counts(self):
-        total_actions = self.state.shape[-1] ** 2 + 1  # Including pass
-        visit_counts = np.zeros(total_actions)
-        for move, child in self.child_nodes.items():
-            visit_counts[move] = child.visits
-        return visit_counts
+        move_visits = []
+        for child in self.child_nodes:
+            if child is None:
+                move_visits.append(0)
+            else:
+                move_visits.append(child.visits)
+        return np.array(move_visits)
+
+    def get_ucbs(self):
+        ucbs = np.full(self.actionsize(), np.nan, dtype=np.float32)
+        valid_moves = np.argwhere(self.valid_moves()).flatten()
+        for a in valid_moves:
+            avg_q, n = 0, 0
+            prior_q = self.prior_pi[a]
+            child = self.child_nodes[a]
+            if child is not None and child.visits > 0:
+                n = child.visits
+                assert len(child.post_vals) > 0, (child.post_vals, n)
+                avg_q = invert_vals(np.mean(np.tanh(child.post_vals)))
+
+            u = 1.5 * prior_q * np.sqrt(self.visits) / (1 + n)
+            ucbs[a] = avg_q + u
+        return np.array(ucbs)
+
+    def __str__(self):
+        result = ''
+        if self.val is not None:
+            result += f'{self.val:.2f}V'
+        if len(self.post_vals) > 0:
+            result += f' {np.mean(self.post_vals):.2f}AV'
+
+        result += f' {self.level}L {self.visits}N'
+
+        return result
 
 
-def select(node):
-    """
-    Select the child node with the highest UCB value.
-    Args:
-        node (Node): Current node.
-    Returns:
-        Node: Selected child node.
-    """
-    return max(node.child_nodes.values(), key=lambda n: n.get_value())
+GoGame = gym.make('gym_go:go-v0', size=0).gogame
 
-def expand_and_evaluate(node, actor_critic, go_env):
-    """
-    Expand the node and evaluate it using the Actor-Critic network.
-    Args:
-        node (Node): Node to expand.
-        actor_critic (callable): Neural network for policy and value estimation.
-        game: Game environment for generating child states.
-    """
-    state = node.state[np.newaxis]
-    device = next(actor_critic.parameters()).device
-    state = torch.tensor(state, dtype=torch.float32).to(device)
-    policy_logits, value = actor_critic(state)
-    policy_logits = policy_logits.squeeze(0).cpu().detach().numpy()
+def find_next_node(node):
+    curr = node
+    while curr.visits > 0 and not curr.terminal():
+        ucbs = curr.get_ucbs()
+        move = np.nanargmax(ucbs)
+        curr = curr.step(move)
 
-    # Get valid moves
-    GoGame = go_env.gogame
-    valid_moves = GoGame.valid_moves(node.state)
-    policy_logits[valid_moves == 0] = -np.inf  # Mask invalid moves
+    return curr
 
-    # Apply softmax
-    policy = softmax(policy_logits)
-    node.expand(go_env, policy)
-    return value.item()
 
-def mcts_step(root, actor_critic, go_env):
-    """
-    Perform a single MCTS step.
-    Args:
-        root (Node): Root node of the search.
-        actor_critic (callable): Neural network for policy and value estimation.
-        game: Game environment.
-    """
-    node = root
-    while not node.is_leaf() and not node.is_terminal(go_env):
-        node = select(node)
+def mcts_step(rootnode, actor_critic, critic):
+    # Next node to expand
+    node = find_next_node(rootnode)
 
-    if node.is_terminal(go_env):
-        GoGame = go_env.gogame
-        GoVars = go_env.govars
-        current_player = GoGame.turn(node.state)
-        value = GoGame.winning(node.state)
-        # Adjust value to current player's perspective
-        if current_player == GoVars.WHITE:
-            value = -value
-        node.backpropagate(value)
+    # Compute values on internal nodes
+    if actor_critic is not None:
+        pi_logits, val_logits = actor_critic(node.state[np.newaxis])
+    else:
+        assert critic is not None
+        pi_logits = None
+        val_logits = critic(node.state[np.newaxis])
+
+    # Backprop value
+    node.backprop(val_logits.item())
+
+    # Don't need to calculate pi
+    if node.terminal():
         return
 
-    value = expand_and_evaluate(node, actor_critic, go_env)
-    node.backpropagate(value)
+    # Prior Pi
+    if pi_logits is not None:
+        pi = special.softmax(pi_logits.flatten())
+        node.set_prior_pi(pi)
+    else:
+        node.make_children()
+        next_nodes = node.get_child_nodes()
+        set_state_vals(critic, next_nodes)
+        node.set_prior_pi(None)
 
-def mcts_search(go_env, actor_critic, num_simulations):
-    """
-    Perform MCTS on a given game state.
-    Args:
-        game: Game environment.
-        actor_critic (callable): Neural network for policy and value estimation.
-        num_simulations (int): Number of simulations to run.
-    Returns:
-        Node: Root node after search.
-    """
-    state = go_env.canonical_state()
-    root = Node(state=state)
 
-    for _ in range(num_simulations):
-        mcts_step(root, actor_critic, go_env)
+def mcts_search(go_env, num_searches, actor_critic=None, critic=None):
+    # Setup the root
+    rootstate = go_env.canonical_state()
+    rootnode = Node(rootstate)
 
-    return root
+    # The first iteration doesn't count towards the number of searches
+    mcts_step(rootnode, actor_critic, critic)
+
+    # MCT Search
+    for i in range(0, num_searches):
+        mcts_step(rootnode, actor_critic, critic)
+
+    return rootnode

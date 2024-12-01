@@ -1,4 +1,5 @@
 from tqdm import tqdm
+import numpy as np
 
 from go_bot import data
 
@@ -86,6 +87,9 @@ def pit(go_env, black_policy, white_policy):
         else:
             assert curr_turn == data.GoVars.WHITE
             pi = white_policy(go_env, step=num_steps)
+
+        tolerance = 1e-10  # Adjust this threshold as needed
+        pi[np.isclose(pi, 0, atol=tolerance)] = 0.0
 
         action = data.GoGame.random_weighted_action(pi)
 

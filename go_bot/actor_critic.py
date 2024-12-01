@@ -33,6 +33,32 @@ def temp_softmax(qvals, temp, valid_moves):
 
     return pi
 
+# Possible Fix:
+# def temp_softmax(qvals, temp, valid_moves):
+#     if temp <= 0:
+#         pi = greedy_pi(qvals, valid_moves)
+#     else:
+#         valid_indices = np.where(valid_moves)
+#         qvals_valid = qvals[valid_indices]
+        
+#         # Shift logits
+#         qvals_valid -= np.max(qvals_valid)
+        
+#         # Compute exponentials
+#         exp_qvals = np.exp(qvals_valid * (1 / temp))
+        
+#         # Enforce minimum probability
+#         min_prob = 1e-5
+#         exp_qvals = np.maximum(exp_qvals, min_prob)
+        
+#         # Assign back to pi
+#         pi = np.zeros_like(valid_moves, dtype=float)
+#         pi[valid_indices] = exp_qvals
+        
+#         # Renormalize
+#         pi /= pi.sum()
+#     return pi
+
 def temp_norm(qs, temp, valid_moves):
     if temp <= 0:
         pi = greedy_pi(qs, valid_moves)

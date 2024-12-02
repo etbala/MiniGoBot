@@ -1,9 +1,7 @@
 import os
-import warnings
 
 import numpy as np
 import torch
-from mpi4py import MPI
 from torch import nn as nn
 from torch.nn import functional as F
 from scipy import special
@@ -82,13 +80,7 @@ class ModelMetrics:
         return self.__str__()
 
 
-def average_model(comm, model):
-    world_size = comm.Get_size()
-    for params in model.parameters():
-        params.data = comm.allreduce(params.data, op=MPI.SUM) / world_size
-
-
-def get_modelpath(args, savetype):
+def get_modelpath(args):
     return os.path.join(args.checkdir, f'{args.model}{args.size}.pt')
 
 
@@ -348,27 +340,15 @@ class ActorCriticNet(nn.Module):
         # Return metrics
         return cl.item(), ca, al.item(), aa
     
-    def optimize(self, comm: MPI.Intracomm, batched_data, optimizer):
+    def optimize(self, batched_data, optimizer):
         raw_metrics = []
         self.train()
         for states, actions, reward, children, terminal, wins, pi in batched_data:
             metrics = self.train_step(optimizer, states, actions, reward, children, terminal, wins, pi)
             raw_metrics.append(metrics)
 
-        # Sync Parameters
-        average_model(comm, self)
-
-        # Sync Metrics
-        world_size = comm.Get_size()
-        raw_metrics = np.array(raw_metrics, dtype=np.float32)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            mean_metrics = np.nanmean(raw_metrics, axis=0)
-        reduced_metrics = comm.allreduce(mean_metrics, op=MPI.SUM) / world_size
-
-        metrics = ModelMetrics(*reduced_metrics)
-
-        # Return metrics
+        mean_metrics = np.nanmean(np.array(raw_metrics, dtype=np.float32), axis=0)
+        metrics = ModelMetrics(*mean_metrics)
         return metrics
 
 

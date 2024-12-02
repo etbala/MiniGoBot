@@ -5,7 +5,6 @@ import random
 
 import gym
 import numpy as np
-from mpi4py import MPI
 
 go_env = gym.make('gym_go:go-v0', size=0)
 GoVars = go_env.govars
@@ -55,8 +54,8 @@ def batch_padded_children(states):
     all_children = []
     all_valid_moves = batch_valid_moves(states)
     for state, valid_moves in zip(states, all_valid_moves):
-        chilren = GoGame.children(state, canonical=True, padded=True)
-        all_children.append(chilren)
+        children = GoGame.children(state, canonical=True, padded=True)
+        all_children.append(children)
     return all_children
 
 
@@ -117,33 +116,18 @@ def load_replay(replay_path):
     return replay
 
 
-def mpi_sample_eventdata(comm: MPI.Intracomm, replay_path, batches, batchsize):
-    """
-    :param replay_path:
-    :param batches:
-    :param batchsize:
-    :return: Batches of sample data, len of total data that was sampled
-    """
-    # Workers sample data one at a time to avoid memory issues
-    rank = comm.Get_rank()
-    world_size = comm.Get_size()
-    sample_data = None
-    replay_len = None
-    for worker in range(world_size):
-        if rank == worker:
-            replay = load_replay(replay_path)
-            replay_len = len(replay)
-            # Seperate into black wins and black non-wins to ensure even sampling between the two
-            black_wins = list(filter(lambda traj: traj.get_winner() == 1, replay))
-            black_nonwins = list(filter(lambda traj: traj.get_winner() != 1, replay))
-            black_wins = replay_to_events(black_wins)
-            black_nonwins = replay_to_events(black_nonwins)
-            n = min(len(black_wins), len(black_nonwins))
-            sample_size = min(batchsize * batches // 2, n)
-            sample_data = random.sample(black_wins, sample_size) + random.sample(black_nonwins, sample_size)
-            # Save memory
-            del replay
-        comm.Barrier()
+def sample_eventdata(replay_path, batches, batchsize):
+    replay = load_replay(replay_path)
+    replay_len = len(replay)
+
+    black_wins = list(filter(lambda traj: traj.get_winner() == 1, replay))
+    black_nonwins = list(filter(lambda traj: traj.get_winner() != 1, replay))
+    black_wins = replay_to_events(black_wins)
+    black_nonwins = replay_to_events(black_nonwins)
+
+    n = min(len(black_wins), len(black_nonwins))
+    sample_size = min(batchsize * batches // 2, n)
+    sample_data = random.sample(black_wins, sample_size) + random.sample(black_nonwins, sample_size)
 
     random.shuffle(sample_data)
     sample_data = events_to_numpy(sample_data)
@@ -159,19 +143,15 @@ def mpi_sample_eventdata(comm: MPI.Intracomm, replay_path, batches, batchsize):
     return batched_sampledata, replay_len
 
 
-def mpi_disk_append_replay(comm: MPI.Intracomm, args, replays):
-    rank = comm.Get_rank()
-    for worker in range(comm.Get_size()):
-        if rank == worker:
-            if os.path.exists(args.replay_path):
-                all_replays = load_replay(args.replay_path)
-                all_replays.extend(replays)
-            else:
-                all_replays = replays
+def append_replay(args, replays):
+    if os.path.exists(args.replay_path):
+        all_replays = load_replay(args.replay_path)
+        all_replays.extend(replays)
+    else:
+        all_replays = replays
 
-            with open(args.replay_path, 'wb') as f:
-                pickle.dump(all_replays, f)
-        comm.Barrier()
+    with open(args.replay_path, 'wb') as f:
+        pickle.dump(all_replays, f)
 
 
 def reset_replay(args):

@@ -35,16 +35,9 @@ MiniGoBot is a reinforcement learning project that combines an actor-critic neur
 - `--size`: Board size (default: 9)
 - `--reward`: Reward system (`real` (default) or `heuristic`)
 
-#### Monte Carlo Tree Search
+#### Training Params
 - `--mcts`: Number of Monte Carlo searches (default: 0)
-- `--width`: Width of beam search (default: 4)
-- `--depth`: Depth of beam search (default: 0)
-- `--gamma`: Confidence factor in Q-values from higher search tree levels (default: 0.99)
-
-#### Learning Params
 - `--lr`: Learning Rate (default: 1e-3)
-
-#### Exploration
 - `--temp`: Initial temperature for exploration (default: 1)
 
 #### Data Sizes
@@ -60,18 +53,17 @@ MiniGoBot is a reinforcement learning project that combines an actor-critic neur
 - `--iterations`: Number of training iterations (default: 128)
 - `--episodes`: Number of episodes per iteration (default: 32)
 - `--evaluations`: Number of evaluation episodes (default: 16)
-- `--eval-interval`: Interval for evaluation in terms of iterations (default: 2)
+- `--eval-interval`: Interval for evaluation in terms of iterations (default: 4)
 
 #### Disk Data
 - `--replay-path`: Path to save replay data (default: `bin/replay.pickle'`)
 - `--checkdir`: Directory to save checkpoints (default: `bin/checkpoints/{today}/`)
 
 #### Model
-- `--model`: Model type
+- `--model`: Model type (`ac` (default), `rand`, `human`)
 
 #### Hardware
 - `--device`: Device for PyTorch models (`cuda` (default), or `cpu`)
 
 #### Visual
 - `--render`: Rendering type (`terminal` (default) or `human`)
-                    help='type of rendering')

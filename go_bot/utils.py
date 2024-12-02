@@ -26,35 +26,26 @@ def hyperparameters(args_encoding=None):
 
     # Go Environment
     parser.add_argument('--size', type=int, default=9, help='board size')
-    parser.add_argument('--reward', type=str, choices=['real', 'heuristic'], default='real', help='reward system')
+    parser.add_argument('--reward', type=str, choices=['real', 'heuristic'], default='heuristic', help='reward system')
 
-    # Monte Carlo Tree Search
+    # Params
     parser.add_argument('--mcts', type=int, default=0, help='monte carlo searches (actor critic)')
-    parser.add_argument('--width', type=int, default=4, help='width of beam search (value)')
-    parser.add_argument('--depth', type=int, default=0, help='depth of beam search (value)')
-    parser.add_argument('--gamma', type=float, default=0.99,
-                        help='confidence in qvals from higher levels of the search tree')
-
-    # Learning Parameters
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate')
-
-    # Exploration
     parser.add_argument('--temp', type=float, default=1, help='initial temperature')
 
     # Data Sizes
     parser.add_argument('--batchsize', type=int, default=32, help='batch size')
-    parser.add_argument('--replaysize', type=int, default=256, help='max number of games to store')
+    parser.add_argument('--replaysize', type=int, default=64, help='max number of games to store')
     parser.add_argument('--batches', type=int, default=1000, help='number of batches to train on for one iteration')
 
     # Loading
-    parser.add_argument('--baseline', action='store_true', help='load baseline model')
     parser.add_argument('--customdir', type=str, default='', help='load model from custom directory')
     parser.add_argument('--latest-checkpoint', type=bool, default=False, help='load model from checkpoint')
 
     # Training
     parser.add_argument('--iterations', type=int, default=128, help='iterations')
     parser.add_argument('--episodes', type=int, default=32, help='episodes')
-    parser.add_argument('--evaluations', type=int, default=32, help='episodes')
+    parser.add_argument('--evaluations', type=int, default=16, help='episodes')
     parser.add_argument('--eval-interval', type=int, default=2, help='iterations per evaluation')
 
     # Disk Data
@@ -62,7 +53,7 @@ def hyperparameters(args_encoding=None):
     parser.add_argument('--checkdir', type=str, default=f'bin/checkpoints/{today}/')
 
     # Model
-    parser.add_argument('--model', type=str, choices=['val', 'ac', 'attn', 'rand', 'greedy', 'human'],
+    parser.add_argument('--model', type=str, choices=['ac', 'rand', 'greedy', 'human'],
                         default='ac', help='type of model')
 
     # Hardware
@@ -74,7 +65,6 @@ def hyperparameters(args_encoding=None):
 
     args = parser.parse_args(args_encoding)
 
-    setattr(args, 'basepath', os.path.join('bin/baselines/', f'{args.model}{args.size}.pt'))
     setattr(args, 'checkpath', os.path.join(args.checkdir, f'{args.model}{args.size}.pt'))
     setattr(args, 'custompath', os.path.join(args.customdir, f'{args.model}{args.size}.pt'))
 
@@ -160,12 +150,10 @@ def mpi_sync_data(comm: MPI.Intracomm, args):
         # Clear worker data
         data.reset_replay(args)
 
-        if args.baseline or args.customdir != '':
+        if args.customdir != '':
             if os.path.exists(args.checkpath):
                 # Ensure that we do not use any old parameters
                 os.remove(args.checkpath)
-            if args.baseline:
-                mpi_log_debug(comm, "Starting from baseline")
             else:
                 mpi_log_debug(comm, f"Starting from model file: {args.custompath}")
         else:
@@ -178,16 +166,6 @@ def mpi_sync_data(comm: MPI.Intracomm, args):
 
 
 def mpi_play(comm: MPI.Intracomm, go_env, pi1, pi2, requested_episodes):
-    """
-    Plays games in parallel
-    :param comm:
-    :param go_env:
-    :param pi1:
-    :param pi2:
-    :param gettraj:
-    :param requested_episodes:
-    :return:
-    """
     world_size = comm.Get_size()
 
     worker_episodes = int(math.ceil(requested_episodes / world_size))

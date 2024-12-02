@@ -21,52 +21,20 @@ def greedy_pi(qvals, valid_moves):
     return pi
 
 def temp_softmax(qvals, temp, valid_moves):
-    if temp <= 0:
-        # Max Qs
-        pi = greedy_pi(qvals, valid_moves)
-    else:
-        pi = np.zeros(valid_moves.shape)
-        valid_indcs = np.where(valid_moves)
-        if qvals.shape == valid_moves.shape:
-            qvals = qvals[valid_indcs]
-        pi[valid_indcs] = special.softmax(qvals * (1 / temp))
+    if temp <= 1e-5:
+        return greedy_pi(qvals, valid_moves)
+    
+    pi = np.zeros_like(valid_moves, dtype=float)
+    valid_indcs = np.where(valid_moves)
 
-    return pi
+    if valid_indcs[0].size == 0:
+        return pi
 
-# Possible Fix:
-# def temp_softmax(qvals, temp, valid_moves):
-#     if temp <= 0:
-#         pi = greedy_pi(qvals, valid_moves)
-#     else:
-#         valid_indices = np.where(valid_moves)
-#         qvals_valid = qvals[valid_indices]
-        
-#         # Shift logits
-#         qvals_valid -= np.max(qvals_valid)
-        
-#         # Compute exponentials
-#         exp_qvals = np.exp(qvals_valid * (1 / temp))
-        
-#         # Enforce minimum probability
-#         min_prob = 1e-5
-#         exp_qvals = np.maximum(exp_qvals, min_prob)
-        
-#         # Assign back to pi
-#         pi = np.zeros_like(valid_moves, dtype=float)
-#         pi[valid_indices] = exp_qvals
-        
-#         # Renormalize
-#         pi /= pi.sum()
-#     return pi
-
-def temp_norm(qs, temp, valid_moves):
-    if temp <= 0:
-        pi = greedy_pi(qs, valid_moves)
-    else:
-        pi = np.zeros(valid_moves.shape)
-        where_valid = np.where(valid_moves)
-        pi[where_valid] = preprocessing.normalize(qs[where_valid][np.newaxis], norm='l1')[0]
-        pi = preprocessing.normalize(pi[np.newaxis] ** (1 / temp), norm='l1')[0]
+    valid_qvals = qvals[valid_indcs]
+    shifted_qvals = valid_qvals - np.max(valid_qvals)
+    scaled_qvals = shifted_qvals * (1 / temp)
+    softmax_vals = special.softmax(scaled_qvals)
+    pi[valid_indcs] = softmax_vals
 
     return pi
 
@@ -121,15 +89,7 @@ def average_model(comm, model):
 
 
 def get_modelpath(args, savetype):
-    if savetype == 'checkpoint':
-        dir = args.checkdir
-    elif savetype == 'baseline':
-        dir = 'bin/baselines/'
-    else:
-        raise Exception(f"Unknown location type: {savetype}")
-    path = os.path.join(dir, f'{args.model}{args.size}.pt')
-
-    return path
+    return os.path.join(args.checkdir, f'{args.model}{args.size}.pt')
 
 
 class ActorCriticNet(nn.Module):
@@ -414,11 +374,6 @@ class ActorCriticNet(nn.Module):
 
 class ActorCriticPolicy:
     def __init__(self, name, model, args=None):
-        """
-        :param branches: The number of actions explored by actor at each node.
-        :param depth: The number of steps to explore with actor. Includes opponent,
-        i.e. even depth means the last step explores the opponent's
-        """
         self.name = name
         self.temp = args.temp
         self.pt_model = model
@@ -428,12 +383,6 @@ class ActorCriticPolicy:
         self.mcts = args.mcts
 
     def __call__(self, go_env, **kwargs):
-        """
-        :param state: Unused variable since we already have the state stored in the tree
-        :param step: Parameter used for getting the temperature
-        :return:
-        """
-
         if self.mcts > 0:
             rootnode = mcts.mcts_search(go_env, self.mcts, self.ac_func)
             qs = self.tree_to_qs(rootnode)
@@ -453,7 +402,7 @@ class ActorCriticPolicy:
             # Just use value function to get policy
             rootnode = mcts.mcts_search(go_env, self.mcts, critic=self.val_func)
             q_logits = rootnode.inverted_children_values()
-            pi = temp_norm(np.exp(q_logits), self.temp, rootnode.valid_moves())
+            pi = temp_softmax(np.exp(q_logits), self.temp, rootnode.valid_moves())
             qs = [q_logits]
         else:
             # Just use policy function and don't search

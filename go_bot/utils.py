@@ -26,7 +26,7 @@ def hyperparameters(args_encoding=None):
 
     # Data Sizes
     parser.add_argument('--batchsize', type=int, default=32, help='batch size')
-    parser.add_argument('--replaysize', type=int, default=64, help='max number of games to store')
+    parser.add_argument('--replaysize', type=int, default=16, help='max number of games to store')
     parser.add_argument('--batches', type=int, default=1000, help='number of batches to train on for one iteration')
 
     # Loading
@@ -69,12 +69,17 @@ def count_parameters(model: torch.nn.Module):
 
 def config_log(args):
     formatter = logging.Formatter('%(message)s')
-    handler = logging.FileHandler(os.path.join(args.checkdir, 'training_log.txt'), 'w')
+
+    # Use append mode if latest-checkpoint is True
+    file_mode = 'a' if args.latest_checkpoint else 'w'
+    handler = logging.FileHandler(os.path.join(args.checkdir, 'training_log.txt'), file_mode)
     handler.setLevel(logging.INFO)
     handler.setFormatter(formatter)
+
     console = logging.StreamHandler()
     console.setLevel(logging.DEBUG)
     console.setFormatter(formatter)
+
     logging.basicConfig(level=logging.DEBUG, handlers=[console, handler])
 
 

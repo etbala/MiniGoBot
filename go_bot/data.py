@@ -6,7 +6,7 @@ import random
 import gym
 import numpy as np
 
-go_env = gym.make('gym_go:go-v0', size=0)
+go_env = gym.make('gym_go:go-v0', size=0, disable_env_checker=True)
 GoVars = go_env.govars
 GoGame = go_env.gogame
 
@@ -159,12 +159,16 @@ def sample_eventdata(replay_path, batches, batchsize):
 def append_replay(args, replays):
     if os.path.exists(args.replay_path):
         all_replays = load_replay(args.replay_path)
-        all_replays.extend(replays)
     else:
-        all_replays = replays
+        all_replays = collections.deque(maxlen=args.replaysize)
 
+    all_replays.extend(replays)
+    
+    # Use deque for automatic size limitation
+    limited_replays = collections.deque(all_replays, maxlen=args.replaysize)
+    
     with open(args.replay_path, 'wb') as f:
-        pickle.dump(all_replays, f)
+        pickle.dump(list(limited_replays), f)
 
 
 def reset_replay(args):

@@ -26,7 +26,7 @@ def hyperparameters(args_encoding=None):
 
     # Data Sizes
     parser.add_argument('--batchsize', type=int, default=32, help='batch size')
-    parser.add_argument('--replaysize', type=int, default=16, help='max number of games to store')
+    parser.add_argument('--replaysize', type=int, default=64, help='max number of games to store')
     parser.add_argument('--batches', type=int, default=1000, help='number of batches to train on for one iteration')
 
     # Loading
@@ -36,7 +36,7 @@ def hyperparameters(args_encoding=None):
     # Training
     parser.add_argument('--iterations', type=int, default=128, help='iterations')
     parser.add_argument('--episodes', type=int, default=32, help='episodes')
-    parser.add_argument('--evaluations', type=int, default=16, help='episodes')
+    parser.add_argument('--evaluations', type=int, default=10, help='episodes')
     parser.add_argument('--eval-interval', type=int, default=2, help='iterations per evaluation')
 
     # Disk Data
@@ -104,7 +104,7 @@ def play_games(go_env, pi1, pi2, requested_episodes):
 
 
 def get_iter_header():
-    return "TIME\tITR\tREPLAY\tC_ACC\tC_LOSS\tA_ACC\tA_LOSS\tG_LOSS\tC_WR\tR_WR\tG_WR"
+    return "TIME\tITR\tREPLAY\tC_ACC\tC_LOSS\tA_ACC\tA_LOSS\tG_LOSS\tC_WR\tR_WR"
 
 
 def get_iter_entry(starttime, iteration, replay_len, metrics, winrates, checkpoint_pi):

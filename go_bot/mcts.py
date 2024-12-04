@@ -2,7 +2,7 @@ import gym
 import numpy as np
 from scipy import special
 
-GoGame = gym.make('gym_go:go-v0', size=0).gogame
+GoGame = gym.make('gym_go:go-v0', size=0, disable_env_checker=True).gogame
 
 def get_state_vals(val_func, nodes):
     states = list(map(lambda node: node.state, nodes))
@@ -188,7 +188,7 @@ class Node:
         return result
 
 
-GoGame = gym.make('gym_go:go-v0', size=0).gogame
+GoGame = gym.make('gym_go:go-v0', size=0, disable_env_checker=True).gogame
 
 def find_next_node(node):
     curr = node

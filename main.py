@@ -11,7 +11,7 @@ from go_bot import actor_critic
 
 
 def model_eval(args, curr_pi, checkpoint_pi, winrates):
-    go_env = gym.make('gym_go:go-v0', size=args.size, reward_method=args.reward)
+    go_env = gym.make('gym_go:go-v0', size=args.size, reward_method=args.reward, disable_env_checker=True)
     for opponent in [checkpoint_pi, baselines.RAND_PI]:
         utils.log_debug(f'Pitting {curr_pi} V {opponent}')
         wr, _, _ = utils.play_games(go_env, curr_pi, opponent, args.evaluations)
@@ -19,7 +19,7 @@ def model_eval(args, curr_pi, checkpoint_pi, winrates):
 
 
 def train_step(args, curr_pi, optim, checkpoint_pi):
-    go_env = gym.make('gym_go:go-v0', size=args.size, reward_method=args.reward)
+    go_env = gym.make('gym_go:go-v0', size=args.size, reward_method=args.reward, disable_env_checker=True)
     curr_model = curr_pi.pt_model
 
     utils.log_debug(f'Self-Playing {checkpoint_pi} V {checkpoint_pi}...')

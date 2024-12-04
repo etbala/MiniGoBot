@@ -85,15 +85,14 @@ class Node:
         return child_node
 
     def make_children(self):
-        """
-        :return: Padded children numpy states
-        """
+        # Use the standard state to generate children
         child_states = GoGame.children(self.state, canonical=True, padded=True)
         actions = np.argwhere(self.valid_moves()).flatten()
         for action in actions:
-            self.make_childnode(action, child_states[action])
+            child_state = child_states[action]
+            # The child_state is in canonical form (since canonical=True)
+            self.make_childnode(action, child_state)
         self.child_states = child_states
-
         return child_states
 
     def get_child_nodes(self):
@@ -201,39 +200,48 @@ def find_next_node(node):
     return curr
 
 
-def mcts_step(rootnode, actor_critic, critic):
+def mcts_step(rootnode, actor_critic=None, critic=None):
     # Next node to expand
     node = find_next_node(rootnode)
 
+    # Convert state to canonical form for the neural network
+    state_canonical = GoGame.canonical_form(node.state)
+
+    # Initialize pi_logits to None
+    pi_logits = None
+
     # Compute values on internal nodes
     if actor_critic is not None:
-        pi_logits, val_logits = actor_critic(node.state[np.newaxis])
+        pi_logits, val_logits = actor_critic(state_canonical[np.newaxis])
     else:
-        assert critic is not None
-        pi_logits = None
-        val_logits = critic(node.state[np.newaxis])
+        val_logits = critic(state_canonical[np.newaxis])
 
-    # Backprop value
+    # Backpropagate the value
     node.backprop(val_logits.item())
 
-    # Don't need to calculate pi
+    # If terminal, no need to expand further
     if node.terminal():
         return
 
-    # Prior Pi
+    # Set prior probabilities
     if pi_logits is not None:
         pi = special.softmax(pi_logits.flatten())
         node.set_prior_pi(pi)
     else:
         node.make_children()
         next_nodes = node.get_child_nodes()
-        set_state_vals(critic, next_nodes)
+        # Set values for child nodes using the critic
+        for child in next_nodes:
+            child_state_canonical = GoGame.canonical_form(child.state)
+            val = critic(child_state_canonical[np.newaxis])
+            child.set_value(val.item())
         node.set_prior_pi(None)
+
 
 
 def mcts_search(go_env, num_searches, actor_critic=None, critic=None):
     # Setup the root
-    rootstate = go_env.canonical_state()
+    rootstate = go_env.state()
     rootnode = Node(rootstate)
 
     # The first iteration doesn't count towards the number of searches

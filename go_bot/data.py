@@ -66,6 +66,19 @@ def batch_random_symmetries(states):
         processed_states.append(GoGame.random_symmetry(state))
     return np.array(processed_states)
 
+# Actual Symmetries:
+# def batch_random_symmetries(states):
+#     # Generate random transformations for each state
+#     flips = np.random.choice([True, False], size=states.shape[0])
+#     rotations = np.random.choice([0, 1, 2, 3], size=states.shape[0])
+#     transformed_states = []
+#     for state, flip, rot in zip(states, flips, rotations):
+#         transformed_state = np.copy(state)
+#         if flip:
+#             transformed_state = np.flip(transformed_state, axis=2)  # Flip horizontally
+#         transformed_state = np.rot90(transformed_state, k=rot, axes=(1, 2))
+#         transformed_states.append(transformed_state)
+#     return np.array(transformed_states)
 
 def batch_combine_state_actions(states, actions):
     new_shape = np.array(states.shape)

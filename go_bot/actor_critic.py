@@ -56,14 +56,12 @@ class BasicBlock(nn.Module):
         return out
 
 class ModelMetrics:
-    def __init__(self, cl=None, ca=None, al=None, aa=None, gl=None):
+    def __init__(self, cl=None, ca=None, al=None, aa=None):
         self.crit_loss = cl
         self.crit_acc = ca
 
         self.act_loss = al
         self.act_acc = aa
-
-        self.game_loss = gl
 
     def __str__(self):
         ret = ''
@@ -71,8 +69,6 @@ class ModelMetrics:
             ret += f'C[{self.crit_acc * 100 :.1f}% {self.crit_loss:.3f}L] '
         if self.act_loss is not None and not np.isnan(self.act_loss):
             ret += f'A[{self.act_acc * 100 :.1f}% {self.act_loss:.3f}L] '
-        if self.game_loss is not None and not np.isnan(self.game_loss):
-            ret += f'G[{self.game_loss:.3f}L] '
 
         return ret
 

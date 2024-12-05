@@ -26,7 +26,7 @@ def hyperparameters(args_encoding=None):
 
     # Data Sizes
     parser.add_argument('--batchsize', type=int, default=32, help='batch size')
-    parser.add_argument('--replaysize', type=int, default=64, help='max number of games to store')
+    parser.add_argument('--replaysize', type=int, default=60, help='max number of games to store')
     parser.add_argument('--batches', type=int, default=1000, help='number of batches to train on for one iteration')
 
     # Loading
@@ -34,10 +34,10 @@ def hyperparameters(args_encoding=None):
     parser.add_argument('--latest-checkpoint', type=bool, default=False, help='load model from checkpoint')
 
     # Training
-    parser.add_argument('--iterations', type=int, default=128, help='iterations')
-    parser.add_argument('--episodes', type=int, default=32, help='episodes')
+    parser.add_argument('--iterations', type=int, default=200, help='iterations')
+    parser.add_argument('--episodes', type=int, default=20, help='episodes')
     parser.add_argument('--evaluations', type=int, default=10, help='episodes')
-    parser.add_argument('--eval-interval', type=int, default=2, help='iterations per evaluation')
+    parser.add_argument('--eval-interval', type=int, default=1, help='iterations per evaluation')
 
     # Disk Data
     parser.add_argument('--replay-path', type=str, default='bin/replay.pickle', help='path to store replay')
@@ -104,7 +104,7 @@ def play_games(go_env, pi1, pi2, requested_episodes):
 
 
 def get_iter_header():
-    return "TIME\tITR\tREPLAY\tC_ACC\tC_LOSS\tA_ACC\tA_LOSS\tG_LOSS\tC_WR\tR_WR"
+    return "TIME\tITR\tREPLAY\tC_ACC\tC_LOSS\tA_ACC\tA_LOSS\tR_WR"
 
 
 def get_iter_entry(starttime, iteration, replay_len, metrics, winrates, checkpoint_pi):
@@ -119,6 +119,5 @@ def get_iter_entry(starttime, iteration, replay_len, metrics, winrates, checkpoi
         iter_info += f"{100 * metrics.act_acc:04.1f}\t{metrics.act_loss:04.3f}\t"
     else:
         iter_info += "____\t____\t"
-    iter_info += f"{metrics.game_loss:04.3f}\t" if metrics.game_loss else "____\t"
-    iter_info += f"{100 * winrates[checkpoint_pi]:04.1f}\t{100 * winrates[baselines.RAND_PI]:04.1f}"
+    iter_info += f"{100 * winrates[baselines.RAND_PI]:04.1f}"
     return iter_info

@@ -2,6 +2,8 @@ import gym
 import numpy as np
 from scipy import special
 
+from go_bot.data import inverse_canonical_form
+
 GoGame = gym.make('gym_go:go-v0', size=0, disable_env_checker=True).gogame
 
 def get_state_vals(val_func, nodes):
@@ -85,15 +87,17 @@ class Node:
         return child_node
 
     def make_children(self):
-        # Use the standard state to generate children
-        child_states = GoGame.children(self.state, canonical=True, padded=True)
+        # Convert the node's state back to standard form
+        state_standard = inverse_canonical_form(self.state)
+        # Generate children from the standard state
+        child_states_canonical = GoGame.children(state_standard, canonical=True, padded=True)
         actions = np.argwhere(self.valid_moves()).flatten()
         for action in actions:
-            child_state = child_states[action]
-            # The child_state is in canonical form (since canonical=True)
-            self.make_childnode(action, child_state)
-        self.child_states = child_states
-        return child_states
+            child_state_canonical = child_states_canonical[action]
+            # The child_state_canonical is already in canonical form
+            self.make_childnode(action, child_state_canonical)
+        self.child_states = child_states_canonical
+        return child_states_canonical
 
     def get_child_nodes(self):
         real_nodes = list(filter(lambda node: node is not None, self.child_nodes))
@@ -110,8 +114,12 @@ class Node:
         if child is not None:
             return child
         else:
-            next_state = GoGame.next_state(self.state, move, canonical=True)
-            child = self.make_childnode(move, next_state)
+            # Convert the node's state back to standard form
+            state_standard = inverse_canonical_form(self.state)
+            # Generate the next state from the standard state
+            next_state_canonical = GoGame.next_state(state_standard, move, canonical=True)
+            # Store the child state in canonical form
+            child = self.make_childnode(move, next_state_canonical)
             return child
 
 
@@ -187,8 +195,6 @@ class Node:
 
         return result
 
-
-GoGame = gym.make('gym_go:go-v0', size=0, disable_env_checker=True).gogame
 
 def find_next_node(node):
     curr = node

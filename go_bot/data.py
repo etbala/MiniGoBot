@@ -3,6 +3,8 @@ import os
 import pickle
 import random
 
+from gym_go import state_utils
+
 import gym
 import numpy as np
 
@@ -10,6 +12,23 @@ go_env = gym.make('gym_go:go-v0', size=0, disable_env_checker=True)
 GoVars = go_env.govars
 GoGame = go_env.gogame
 
+def inverse_canonical_form(state):
+    # Copy the state to avoid modifying the original
+    state = np.copy(state)
+    
+    # Swap the data in the black and white channels without reordering
+    temp = state[GoVars.BLACK].copy()
+    state[GoVars.BLACK] = state[GoVars.WHITE]
+    state[GoVars.WHITE] = temp
+    
+    # Switch the turn back
+    state[GoVars.TURN_CHNL][:] = 1 - state[GoVars.TURN_CHNL][:]
+    
+    # Recompute the invalid moves channel
+    player = int(np.max(state[GoVars.TURN_CHNL]))
+    state[GoVars.INVD_CHNL] = state_utils.compute_invalid_moves(state, player)
+    
+    return state
 
 def batch_invalid_moves(states):
     """
@@ -52,33 +71,37 @@ def batch_win_children(batch_children):
 
 def batch_padded_children(states):
     all_children = []
-    all_valid_moves = batch_valid_moves(states)
-    for state, valid_moves in zip(states, all_valid_moves):
-        children = GoGame.children(state, canonical=True, padded=True)
+    for state in states:
+        # Convert the canonical state back to the standard form
+        state_standard = inverse_canonical_form(state)
+        # Generate children from the standard state
+        children = GoGame.children(state_standard, canonical=False, padded=True)
         all_children.append(children)
+    # Convert list of arrays to a NumPy array
+    all_children = np.array(all_children)
     return all_children
 
 
-def batch_random_symmetries(states):
-    assert len(states.shape) == 4
-    processed_states = []
-    for state in states:
-        processed_states.append(GoGame.random_symmetry(state))
-    return np.array(processed_states)
+# def batch_random_symmetries(states):
+#     assert len(states.shape) == 4
+#     processed_states = []
+#     for state in states:
+#         processed_states.append(GoGame.random_symmetry(state))
+#     return np.array(processed_states)
 
 # Actual Symmetries:
-# def batch_random_symmetries(states):
-#     # Generate random transformations for each state
-#     flips = np.random.choice([True, False], size=states.shape[0])
-#     rotations = np.random.choice([0, 1, 2, 3], size=states.shape[0])
-#     transformed_states = []
-#     for state, flip, rot in zip(states, flips, rotations):
-#         transformed_state = np.copy(state)
-#         if flip:
-#             transformed_state = np.flip(transformed_state, axis=2)  # Flip horizontally
-#         transformed_state = np.rot90(transformed_state, k=rot, axes=(1, 2))
-#         transformed_states.append(transformed_state)
-#     return np.array(transformed_states)
+def batch_random_symmetries(states):
+    # Generate random transformations for each state
+    flips = np.random.choice([True, False], size=states.shape[0])
+    rotations = np.random.choice([0, 1, 2, 3], size=states.shape[0])
+    transformed_states = []
+    for state, flip, rot in zip(states, flips, rotations):
+        transformed_state = np.copy(state)
+        if flip:
+            transformed_state = np.flip(transformed_state, axis=2)  # Flip horizontally
+        transformed_state = np.rot90(transformed_state, k=rot, axes=(1, 2))
+        transformed_states.append(transformed_state)
+    return np.array(transformed_states)
 
 def batch_combine_state_actions(states, actions):
     new_shape = np.array(states.shape)

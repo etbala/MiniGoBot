@@ -12,7 +12,7 @@ from go_bot import actor_critic
 
 def model_eval(args, curr_pi, checkpoint_pi, winrates):
     go_env = gym.make('gym_go:go-v0', size=args.size, reward_method=args.reward, disable_env_checker=True)
-    for opponent in [checkpoint_pi, baselines.RAND_PI]:
+    for opponent in [baselines.RAND_PI]:
         utils.log_debug(f'Pitting {curr_pi} V {opponent}')
         wr, _, _ = utils.play_games(go_env, curr_pi, opponent, args.evaluations)
         winrates[opponent] = wr
